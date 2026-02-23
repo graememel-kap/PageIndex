@@ -23,6 +23,14 @@ function stageIndex(stage: JobStage): number {
 
 export function ProgressRail({ job, onCancel, connectionWarning }: ProgressRailProps) {
   const percent = Math.round((job?.progress ?? 0) * 100)
+  const lastActivityAt =
+    job && job.activity.length > 0
+      ? new Date(job.activity[job.activity.length - 1].timestamp).getTime()
+      : null
+  const staleSeconds =
+    job?.status === 'RUNNING' && lastActivityAt
+      ? Math.max(0, Math.floor((Date.now() - lastActivityAt) / 1000))
+      : 0
 
   return (
     <div className="progress-pane">
@@ -47,6 +55,12 @@ export function ProgressRail({ job, onCancel, connectionWarning }: ProgressRailP
             <div className="progress-track">
               <div className="progress-fill" style={{ width: `${percent}%` }} />
             </div>
+            {job?.status === 'RUNNING' && staleSeconds >= 90 ? (
+              <p className="warning-text">
+                No new activity for {staleSeconds}s. The backend may still be waiting on model
+                responses.
+              </p>
+            ) : null}
             {connectionWarning ? <p className="warning-text">{connectionWarning}</p> : null}
             {job.error ? <p className="error-text">{job.error}</p> : null}
           </div>
@@ -56,7 +70,15 @@ export function ProgressRail({ job, onCancel, connectionWarning }: ProgressRailP
               const current = stageIndex(job.stage)
               const target = stageIndex(stage)
               const status =
-                target < current ? 'done' : target === current ? 'active' : 'pending'
+                job.status === 'COMPLETED'
+                  ? target <= current
+                    ? 'done'
+                    : 'pending'
+                  : target < current
+                    ? 'done'
+                    : target === current
+                      ? 'active'
+                      : 'pending'
               return (
                 <li key={stage} className={`timeline-item ${status}`}>
                   <span className="timeline-dot" />

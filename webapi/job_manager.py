@@ -127,7 +127,8 @@ class JobManager:
 
     def _build_command(self, job: PersistedJob) -> List[str]:
         options = dict(job.options)
-        cmd = ["python3", str(self.repo_root / "run_pageindex.py")]
+        # -u forces unbuffered stdout/stderr so progress lines stream in real time.
+        cmd = ["python3", "-u", str(self.repo_root / "run_pageindex.py")]
         if job.input_type == "pdf":
             cmd.extend(["--pdf_path", job.input_path])
         else:
@@ -154,6 +155,39 @@ class JobManager:
             cmd.extend([arg_name, str(value)])
 
         return cmd
+
+    async def _heartbeat_running_job(
+        self,
+        job_id: str,
+        process: asyncio.subprocess.Process,
+        interval_s: float = 30.0,
+    ) -> None:
+        start = asyncio.get_running_loop().time()
+        last_activity_count = len(self.jobs[job_id].activity)
+        while process.returncode is None:
+            await asyncio.sleep(interval_s)
+            if process.returncode is not None:
+                break
+
+            job = self.jobs.get(job_id)
+            if job is None or job.status != JobStatus.RUNNING:
+                break
+
+            current_count = len(job.activity)
+            if current_count == last_activity_count:
+                elapsed = int(asyncio.get_running_loop().time() - start)
+                mins, secs = divmod(elapsed, 60)
+                self._append_activity(
+                    job,
+                    "system",
+                    f"Still running ({mins:02d}:{secs:02d}) - waiting for model responses.",
+                )
+                job.updated_at = self._now_iso()
+                self._persist(job)
+                self._emit_update(job)
+                last_activity_count = len(job.activity)
+            else:
+                last_activity_count = current_count
 
     async def _detect_log_file(
         self,
@@ -263,6 +297,7 @@ class JobManager:
 
         stdout_task = asyncio.create_task(self._consume_stream(job_id, process.stdout, "stdout"))
         stderr_task = asyncio.create_task(self._consume_stream(job_id, process.stderr, "stderr"))
+        heartbeat_task = asyncio.create_task(self._heartbeat_running_job(job_id, process))
 
         log_file = await self._detect_log_file(before_logs, process)
         log_task: Optional[asyncio.Task] = None
@@ -275,7 +310,7 @@ class JobManager:
             log_task = asyncio.create_task(self._consume_log_file(job_id, log_file, process))
 
         return_code = await process.wait()
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        await asyncio.gather(stdout_task, stderr_task, heartbeat_task, return_exceptions=True)
         if log_task is not None:
             await asyncio.gather(log_task, return_exceptions=True)
 
