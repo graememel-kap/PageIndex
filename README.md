@@ -218,6 +218,64 @@ To address this, we introduced PageIndex OCR — the first long-context OCR mode
 
 ---
 
+# 🖥️ Local Web Workbench (V1)
+
+This repository now includes a local-first web frontend and API wrapper for interactive indexing.
+
+## Architecture
+
+- **Backend API (FastAPI):** `/Users/graememelville/localrepos/PageIndex/webapi`
+- **Frontend (React + Vite + TypeScript):** `/Users/graememelville/localrepos/PageIndex/frontend`
+- **Persistent web job state:** `/Users/graememelville/localrepos/PageIndex/.pageindex-web/jobs`
+- **Uploaded files:** `/Users/graememelville/localrepos/PageIndex/.pageindex-web/uploads`
+
+The web app wraps `run_pageindex.py`, streams live progress with SSE, supports cancellation, and lets you inspect completed trees.
+
+## Run Locally
+
+### 1. Install Python dependencies
+
+```bash
+pip3 install --upgrade -r requirements.txt
+```
+
+### 2. Install frontend dependencies
+
+```bash
+cd frontend
+npm install
+```
+
+### 3. Start the backend API
+
+From repo root:
+
+```bash
+python3 -m webapi.run
+```
+
+Backend URL: `http://127.0.0.1:8000`
+
+### 4. Start the frontend dev server
+
+In another terminal:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Frontend URL: `http://127.0.0.1:5173`
+
+### 5. Run your first job
+
+- Open the frontend URL.
+- Upload a PDF or Markdown file.
+- Configure options and start indexing.
+- Watch live progress and inspect results in the tree explorer.
+
+---
+
 # 📈 Case Study: PageIndex Leads Finance QA Benchmark
 
 [Mafin 2.5](https://vectify.ai/mafin) is a reasoning-based RAG system for financial document analysis, powered by **PageIndex**. It achieved a state-of-the-art [**98.7% accuracy**](https://vectify.ai/blog/Mafin2.5) on the [FinanceBench](https://arxiv.org/abs/2311.11944) benchmark, significantly outperforming traditional vector-based RAG systems.
