@@ -147,12 +147,24 @@ You can follow these steps to generate a PageIndex tree from a PDF document.
 pip3 install --upgrade -r requirements.txt
 ```
 
-### 2. Set your OpenAI API key
+### 2. Set your LLM provider credentials
 
-Create a `.env` file in the root directory and add your API key:
+Create a `.env` file in the root directory.
+
+For OpenAI (default):
 
 ```bash
+PAGEINDEX_LLM_PROVIDER=openai
 CHATGPT_API_KEY=your_openai_key_here
+```
+
+For Azure OpenAI:
+
+```bash
+PAGEINDEX_LLM_PROVIDER=azure
+AZURE_OPENAI_ENDPOINT=https://YOUR_RESOURCE_NAME.openai.azure.com/
+AZURE_OPENAI_API_KEY=your_azure_openai_key_here
+AZURE_OPENAI_API_VERSION=2024-02-01
 ```
 
 ### 3. Run PageIndex on your PDF
@@ -167,7 +179,7 @@ python3 run_pageindex.py --pdf_path /path/to/your/document.pdf
 You can customize the processing with additional optional arguments:
 
 ```
---model                 OpenAI model to use (default: gpt-4o-2024-11-20)
+--model                 OpenAI model to use (or Azure deployment name when PAGEINDEX_LLM_PROVIDER=azure)
 --toc-check-pages       Pages to check for table of contents (default: 20)
 --max-pages-per-node    Max pages per node (default: 10)
 --max-tokens-per-node   Max tokens per node (default: 20000)
