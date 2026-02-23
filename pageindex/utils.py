@@ -781,6 +781,37 @@ def format_structure(structure, order=None):
     return structure
 
 
+class IndexingMetrics:
+    """Tracks phase durations for indexing runs to identify bottlenecks."""
+
+    def __init__(self):
+        self._run_start: float = time.time()
+        self._phase_starts: dict = {}
+        self.phases: dict = {}
+
+    def start_phase(self, name: str) -> None:
+        """Record the start of a named phase."""
+        self._phase_starts[name] = time.time()
+
+    def end_phase(self, name: str) -> float:
+        """Record the end of a named phase and return its duration in seconds."""
+        start = self._phase_starts.pop(name, None)
+        if start is None:
+            return 0.0
+        duration = round(time.time() - start, 3)
+        self.phases[name] = duration
+        return duration
+
+    def summary(self) -> dict:
+        """Return a metrics summary dict suitable for logging."""
+        total = round(time.time() - self._run_start, 3)
+        return {
+            "type": "metrics_summary",
+            "total_duration_s": total,
+            "phases": dict(self.phases),
+        }
+
+
 class ConfigLoader:
     def __init__(self, default_path: str = None):
         if default_path is None:
