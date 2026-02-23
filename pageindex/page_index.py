@@ -1019,9 +1019,14 @@ async def process_large_node_recursively(node, page_list, opt=None, logger=None)
     return node
 
 async def tree_parser(page_list, opt, doc=None, logger=None):
+    metrics = IndexingMetrics()
+
+    metrics.start_phase('toc_detection')
     check_toc_result = check_toc(page_list, opt)
+    metrics.end_phase('toc_detection')
     logger.info(check_toc_result)
 
+    metrics.start_phase('toc_processing')
     if check_toc_result.get("toc_content") and check_toc_result["toc_content"].strip() and check_toc_result["page_index_given_in_toc"] == "yes":
         toc_with_page_number = await meta_processor(
             page_list, 
@@ -1038,25 +1043,36 @@ async def tree_parser(page_list, opt, doc=None, logger=None):
             start_index=1, 
             opt=opt,
             logger=logger)
+    metrics.end_phase('toc_processing')
 
     toc_with_page_number = add_preface_if_needed(toc_with_page_number)
+
+    metrics.start_phase('title_verification')
     toc_with_page_number = await check_title_appearance_in_start_concurrent(toc_with_page_number, page_list, model=opt.model, logger=logger)
+    metrics.end_phase('title_verification')
     
     # Filter out items with None physical_index before post_processings
     valid_toc_items = [item for item in toc_with_page_number if item.get('physical_index') is not None]
     
     toc_tree = post_processing(valid_toc_items, len(page_list))
+
+    metrics.start_phase('large_node_processing')
     tasks = [
         process_large_node_recursively(node, page_list, opt, logger=logger)
         for node in toc_tree
     ]
     await asyncio.gather(*tasks)
-    
+    metrics.end_phase('large_node_processing')
+
+    summary = metrics.summary()
+    summary["component"] = "tree_parser"
+    logger.info(summary)
     return toc_tree
 
 
 def page_index_main(doc, opt=None):
     logger = JsonLogger(doc)
+    metrics = IndexingMetrics()
     
     is_valid_pdf = (
         (isinstance(doc, str) and os.path.isfile(doc) and doc.lower().endswith(".pdf")) or 
@@ -1066,13 +1082,18 @@ def page_index_main(doc, opt=None):
         raise ValueError("Unsupported input type. Expected a PDF file path or BytesIO object.")
 
     print('Parsing PDF...')
+    metrics.start_phase('pdf_parsing')
     page_list = get_page_tokens(doc)
+    metrics.end_phase('pdf_parsing')
 
     logger.info({'total_page_number': len(page_list)})
     logger.info({'total_token': sum([page[1] for page in page_list])})
 
     async def page_index_builder():
+        metrics.start_phase('index_build')
         structure = await tree_parser(page_list, opt, doc=doc, logger=logger)
+        metrics.end_phase('index_build')
+
         if opt.if_add_node_id == 'yes':
             write_node_id(structure)    
         if opt.if_add_node_text == 'yes':
@@ -1080,18 +1101,22 @@ def page_index_main(doc, opt=None):
         if opt.if_add_node_summary == 'yes':
             if opt.if_add_node_text == 'no':
                 add_node_text(structure, page_list)
+            metrics.start_phase('summarization')
             await generate_summaries_for_structure(structure, model=opt.model)
+            metrics.end_phase('summarization')
             if opt.if_add_node_text == 'no':
                 remove_structure_text(structure)
             if opt.if_add_doc_description == 'yes':
                 # Create a clean structure without unnecessary fields for description generation
                 clean_structure = create_clean_structure_for_description(structure)
                 doc_description = generate_doc_description(clean_structure, model=opt.model)
+                logger.info(metrics.summary())
                 return {
                     'doc_name': get_pdf_name(doc),
                     'doc_description': doc_description,
                     'structure': structure,
                 }
+        logger.info(metrics.summary())
         return {
             'doc_name': get_pdf_name(doc),
             'structure': structure,
