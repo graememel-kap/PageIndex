@@ -9,8 +9,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
+from .chat_manager import (
+    ChatConflictError,
+    ChatManager,
+    ChatSessionNotFoundError,
+    ChatValidationError,
+)
 from .job_manager import JobConflictError, JobManager, JobNotFoundError
-from .models import JobDetail, JobSummary
+from .models import (
+    ChatMessageCreateRequest,
+    ChatMessageCreateResponse,
+    ChatSessionsClearResponse,
+    ChatSessionDetail,
+    ChatSessionSummary,
+    JobDetail,
+    JobSummary,
+)
 
 
 def _clean_options(options: Dict[str, Any]) -> Dict[str, Any]:
@@ -27,9 +41,11 @@ def _clean_options(options: Dict[str, Any]) -> Dict[str, Any]:
 def create_app() -> FastAPI:
     repo_root = Path(__file__).resolve().parents[1]
     manager = JobManager(repo_root=repo_root)
+    chat_manager = ChatManager(repo_root=repo_root, job_manager=manager)
 
     app = FastAPI(title="PageIndex Web API", version="0.1.0")
     app.state.job_manager = manager
+    app.state.chat_manager = chat_manager
 
     app.add_middleware(
         CORSMiddleware,
@@ -139,6 +155,103 @@ def create_app() -> FastAPI:
         with path.open("r", encoding="utf-8") as f:
             payload = json.load(f)
         return JSONResponse(payload)
+
+    @app.post(
+        "/api/jobs/{job_id}/chat/sessions",
+        response_model=ChatSessionSummary,
+        status_code=201,
+    )
+    async def create_chat_session(job_id: str) -> ChatSessionSummary:
+        try:
+            return await chat_manager.create_session(job_id=job_id)
+        except JobNotFoundError:
+            raise HTTPException(status_code=404, detail="Job not found")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except ChatValidationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.get("/api/jobs/{job_id}/chat/sessions", response_model=List[ChatSessionSummary])
+    async def list_chat_sessions(job_id: str) -> List[ChatSessionSummary]:
+        try:
+            return chat_manager.list_sessions(job_id=job_id)
+        except JobNotFoundError:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+    @app.get("/api/chat/sessions/{session_id}", response_model=ChatSessionDetail)
+    async def get_chat_session(session_id: str) -> ChatSessionDetail:
+        try:
+            return chat_manager.session_detail(session_id=session_id)
+        except ChatSessionNotFoundError:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
+    @app.delete(
+        "/api/chat/sessions/{session_id}",
+        response_model=ChatSessionsClearResponse,
+    )
+    async def delete_chat_session(session_id: str) -> ChatSessionsClearResponse:
+        try:
+            await chat_manager.delete_session(session_id=session_id)
+            return ChatSessionsClearResponse(deleted_count=1)
+        except ChatSessionNotFoundError:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        except ChatConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.delete(
+        "/api/jobs/{job_id}/chat/sessions",
+        response_model=ChatSessionsClearResponse,
+    )
+    async def clear_chat_sessions_for_job(job_id: str) -> ChatSessionsClearResponse:
+        try:
+            deleted = await chat_manager.clear_sessions_for_job(job_id=job_id)
+            return ChatSessionsClearResponse(deleted_count=deleted)
+        except JobNotFoundError:
+            raise HTTPException(status_code=404, detail="Job not found")
+        except ChatConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.post(
+        "/api/chat/sessions/{session_id}/messages",
+        response_model=ChatMessageCreateResponse,
+    )
+    async def post_chat_message(
+        session_id: str,
+        payload: ChatMessageCreateRequest,
+    ) -> ChatMessageCreateResponse:
+        try:
+            return await chat_manager.start_message_run(
+                session_id=session_id,
+                content=payload.content,
+            )
+        except ChatSessionNotFoundError:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        except ChatConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except ChatValidationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.get("/api/chat/sessions/{session_id}/events")
+    async def stream_chat_events(session_id: str, run_id: str) -> EventSourceResponse:
+        try:
+            queue = await chat_manager.subscribe(session_id=session_id, run_id=run_id)
+        except ChatSessionNotFoundError:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
+        async def event_publisher():
+            try:
+                while True:
+                    payload = await queue.get()
+                    yield {
+                        "event": payload["event"],
+                        "data": json.dumps(payload["data"], ensure_ascii=False),
+                    }
+            finally:
+                await chat_manager.unsubscribe(session_id=session_id, run_id=run_id, queue=queue)
+
+        return EventSourceResponse(event_publisher(), ping=10)
 
     return app
 

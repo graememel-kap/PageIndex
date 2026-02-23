@@ -57,3 +57,107 @@ export interface JobResult {
   doc_description?: string
   structure: JobResultNode[]
 }
+
+export type ChatRole = 'user' | 'assistant' | 'system'
+export type ChatRunStatus = 'RUNNING' | 'COMPLETED' | 'FAILED'
+
+export interface NodeCitation {
+  node_id: string
+  title?: string | null
+  start_index?: number | null
+  end_index?: number | null
+  line_num?: number | null
+}
+
+export interface ChatMessage {
+  id: string
+  role: ChatRole
+  content: string
+  created_at: string
+  citations: NodeCitation[]
+}
+
+export interface ChatRun {
+  id: string
+  status: ChatRunStatus
+  user_message_id: string
+  assistant_message_id: string
+  created_at: string
+  updated_at: string
+  retrieval_thinking?: string | null
+  selected_node_ids: string[]
+  error?: string | null
+}
+
+export interface ChatSessionSummary {
+  id: string
+  job_id: string
+  title: string
+  created_at: string
+  updated_at: string
+  message_count: number
+  last_message_preview?: string | null
+  active_run_id?: string | null
+  active_run_status?: ChatRunStatus | null
+}
+
+export interface ChatSessionDetail extends ChatSessionSummary {
+  messages: ChatMessage[]
+  runs: ChatRun[]
+}
+
+export interface ChatMessageCreateResponse {
+  run_id: string
+  user_message_id: string
+  assistant_message_id: string
+}
+
+export interface ChatSessionsClearResponse {
+  deleted_count: number
+}
+
+export interface ChatRunStarted {
+  session_id: string
+  run_id: string
+  user_message_id: string
+  assistant_message_id: string
+  timestamp: string
+}
+
+export interface ChatRetrievalCompleted {
+  session_id: string
+  run_id: string
+  thinking: string
+  node_ids: string[]
+  citations: NodeCitation[]
+  timestamp: string
+}
+
+export interface ChatAnswerDelta {
+  session_id: string
+  run_id: string
+  assistant_message_id: string
+  delta: string
+  timestamp: string
+}
+
+export interface ChatAnswerCompleted {
+  session_id: string
+  run_id: string
+  assistant_message_id: string
+  citations: NodeCitation[]
+  timestamp: string
+}
+
+export interface ChatRunCompleted {
+  session_id: string
+  run_id: string
+  timestamp: string
+}
+
+export interface ChatRunFailed {
+  session_id: string
+  run_id: string
+  error: string
+  timestamp: string
+}

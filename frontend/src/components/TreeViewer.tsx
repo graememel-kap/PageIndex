@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import type { JobResult, JobResultNode } from '../types'
 
 type TreeViewerProps = {
   result: JobResult | null
+  focusNodeId?: string | null
 }
 
 function flattenNodes(nodes: JobResultNode[]): JobResultNode[] {
@@ -56,11 +57,21 @@ function renderTree(
   )
 }
 
-export function TreeViewer({ result }: TreeViewerProps) {
+export function TreeViewer({ result, focusNodeId }: TreeViewerProps) {
   const nodes = result?.structure ?? []
   const [selectedNode, setSelectedNode] = useState<JobResultNode | null>(null)
 
   const flattened = useMemo(() => flattenNodes(nodes), [nodes])
+
+  useEffect(() => {
+    if (!focusNodeId) {
+      return
+    }
+    const match = flattened.find((node) => node.node_id === focusNodeId)
+    if (match) {
+      setSelectedNode(match)
+    }
+  }, [flattened, focusNodeId])
 
   const selected = selectedNode ?? flattened[0] ?? null
   const activeKey = selected ? nodeIdentity(selected) : null

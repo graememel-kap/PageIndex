@@ -2,16 +2,30 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   cancelJob,
+  clearChatSessions,
+  createChatSession,
   createJob,
+  getChatSession,
   getJob,
   getJobResult,
+  listChatSessions,
   listJobs,
+  openChatEvents,
   openJobEvents,
+  sendChatMessage,
 } from '../api'
+import { ChatPanel } from '../components/ChatPanel'
 import { ProgressRail } from '../components/ProgressRail'
 import { RunHistory } from '../components/RunHistory'
 import { TreeViewer } from '../components/TreeViewer'
-import type { InputType, JobDetail, JobResult, JobSummary } from '../types'
+import type {
+  ChatMessage,
+  ChatSessionDetail,
+  InputType,
+  JobDetail,
+  JobResult,
+  JobSummary,
+} from '../types'
 
 function toYesNo(value: boolean): 'yes' | 'no' {
   return value ? 'yes' : 'no'
@@ -42,8 +56,16 @@ export function WorkbenchPage() {
   const [connectionWarning, setConnectionWarning] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const streamRef = useRef<EventSource | null>(null)
-  const retryRef = useRef<number | null>(null)
+  const [chatSession, setChatSession] = useState<ChatSessionDetail | null>(null)
+  const [chatError, setChatError] = useState<string | null>(null)
+  const [chatLoading, setChatLoading] = useState(false)
+  const [chatRunning, setChatRunning] = useState(false)
+  const [chatRetrievalNote, setChatRetrievalNote] = useState<string | null>(null)
+  const [focusNodeId, setFocusNodeId] = useState<string | null>(null)
+
+  const jobStreamRef = useRef<EventSource | null>(null)
+  const jobRetryRef = useRef<number | null>(null)
+  const chatStreamRef = useRef<EventSource | null>(null)
 
   const [file, setFile] = useState<File | null>(null)
   const [inputType, setInputType] = useState<InputType>('pdf')
@@ -64,14 +86,21 @@ export function WorkbenchPage() {
     [jobs],
   )
 
-  const closeStream = useCallback(() => {
-    if (streamRef.current) {
-      streamRef.current.close()
-      streamRef.current = null
+  const closeJobStream = useCallback(() => {
+    if (jobStreamRef.current) {
+      jobStreamRef.current.close()
+      jobStreamRef.current = null
     }
-    if (retryRef.current !== null) {
-      window.clearTimeout(retryRef.current)
-      retryRef.current = null
+    if (jobRetryRef.current !== null) {
+      window.clearTimeout(jobRetryRef.current)
+      jobRetryRef.current = null
+    }
+  }, [])
+
+  const closeChatStream = useCallback(() => {
+    if (chatStreamRef.current) {
+      chatStreamRef.current.close()
+      chatStreamRef.current = null
     }
   }, [])
 
@@ -84,9 +113,31 @@ export function WorkbenchPage() {
     }
   }, [])
 
+  const loadOrCreateChatSession = useCallback(async (jobId: string) => {
+    setChatLoading(true)
+    setChatError(null)
+    setChatRetrievalNote(null)
+    try {
+      const list = await listChatSessions(jobId)
+      const selected =
+        list.length > 0 ? list[0] : await createChatSession(jobId)
+      const detail = await getChatSession(selected.id)
+      setChatSession(detail)
+      setChatRunning(detail.active_run_status === 'RUNNING')
+    } catch (err) {
+      setChatSession(null)
+      setChatRunning(false)
+      setChatError(err instanceof Error ? err.message : 'Failed to load chat session')
+    } finally {
+      setChatLoading(false)
+    }
+  }, [])
+
   const loadJob = useCallback(
     async (jobId: string) => {
       try {
+        closeChatStream()
+        setFocusNodeId(null)
         const detail = await getJob(jobId)
         setSelectedJob(detail)
         setSelectedJobId(jobId)
@@ -94,19 +145,24 @@ export function WorkbenchPage() {
 
         if (detail.status === 'COMPLETED') {
           await loadResult(jobId)
+          await loadOrCreateChatSession(jobId)
         } else {
           setResult(null)
+          setChatSession(null)
+          setChatRunning(false)
+          setChatError(null)
+          setChatRetrievalNote(null)
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load job')
       }
     },
-    [loadResult],
+    [closeChatStream, loadOrCreateChatSession, loadResult],
   )
 
   const subscribeToJob = useCallback(
     (jobId: string) => {
-      closeStream()
+      closeJobStream()
       setConnectionWarning(null)
 
       const stream = openJobEvents(jobId, {
@@ -115,6 +171,9 @@ export function WorkbenchPage() {
           setJobs((prev) => mergeSummary(prev, job))
           if (job.status === 'COMPLETED') {
             void loadResult(job.id)
+            if (job.id === selectedJobId) {
+              void loadOrCreateChatSession(job.id)
+            }
           }
           if (job.status === 'FAILED' || job.status === 'CANCELLED' || job.status === 'COMPLETED') {
             setConnectionWarning(null)
@@ -131,17 +190,17 @@ export function WorkbenchPage() {
         },
         onConnectionError: () => {
           setConnectionWarning('Live stream interrupted. Reconnecting...')
-          if (retryRef.current === null) {
-            retryRef.current = window.setTimeout(() => {
-              retryRef.current = null
+          if (jobRetryRef.current === null) {
+            jobRetryRef.current = window.setTimeout(() => {
+              jobRetryRef.current = null
               subscribeToJob(jobId)
             }, 2000)
           }
         },
       })
-      streamRef.current = stream
+      jobStreamRef.current = stream
     },
-    [closeStream, loadResult],
+    [closeJobStream, loadOrCreateChatSession, loadResult, selectedJobId],
   )
 
   const loadJobs = useCallback(async () => {
@@ -158,8 +217,11 @@ export function WorkbenchPage() {
 
   useEffect(() => {
     void loadJobs()
-    return () => closeStream()
-  }, [closeStream, loadJobs])
+    return () => {
+      closeJobStream()
+      closeChatStream()
+    }
+  }, [closeChatStream, closeJobStream, loadJobs])
 
   useEffect(() => {
     const target = activeRunningJobId ?? selectedJobId
@@ -224,6 +286,118 @@ export function WorkbenchPage() {
       setError(err instanceof Error ? err.message : 'Failed to cancel job')
     }
   }
+
+  const applyChatDelta = useCallback((assistantMessageId: string, delta: string) => {
+    setChatSession((prev) => {
+      if (!prev) {
+        return prev
+      }
+      const nextMessages: ChatMessage[] = prev.messages.map((message) => {
+        if (message.id !== assistantMessageId) {
+          return message
+        }
+        return { ...message, content: `${message.content}${delta}` }
+      })
+      return { ...prev, messages: nextMessages }
+    })
+  }, [])
+
+  const onSendChat = useCallback(
+    async (content: string) => {
+      if (!chatSession || !selectedJobId) {
+        return
+      }
+      setChatError(null)
+      setChatRetrievalNote(null)
+      setFocusNodeId(null)
+      setChatRunning(true)
+
+      try {
+        const started = await sendChatMessage(chatSession.id, content)
+        const refreshed = await getChatSession(chatSession.id)
+        setChatSession(refreshed)
+
+        closeChatStream()
+        const stream = openChatEvents(chatSession.id, started.run_id, {
+          onRunStarted: () => {
+            setChatRunning(true)
+          },
+          onRetrievalCompleted: (payload) => {
+            if (payload.node_ids.length === 0) {
+              setChatRetrievalNote('No matching sections were selected by retrieval.')
+            } else {
+              setChatRetrievalNote(
+                `Retrieved ${payload.node_ids.length} candidate section(s): ${payload.node_ids.join(', ')}`,
+              )
+            }
+            if (payload.node_ids.length > 0) {
+              setFocusNodeId(payload.node_ids[0])
+            }
+          },
+          onAnswerDelta: (payload) => {
+            applyChatDelta(payload.assistant_message_id, payload.delta)
+          },
+          onAnswerCompleted: async (payload) => {
+            setChatSession((prev) => {
+              if (!prev) {
+                return prev
+              }
+              const nextMessages = prev.messages.map((message) => {
+                if (message.id !== payload.assistant_message_id) {
+                  return message
+                }
+                return { ...message, citations: payload.citations }
+              })
+              return { ...prev, messages: nextMessages }
+            })
+          },
+          onRunCompleted: async () => {
+            setChatRunning(false)
+            closeChatStream()
+            const detail = await getChatSession(chatSession.id)
+            setChatSession(detail)
+          },
+          onRunFailed: async (payload) => {
+            setChatRunning(false)
+            setChatError(payload.error)
+            closeChatStream()
+            const detail = await getChatSession(chatSession.id)
+            setChatSession(detail)
+          },
+          onConnectionError: () => {
+            setChatError('Chat stream interrupted.')
+          },
+        })
+        chatStreamRef.current = stream
+      } catch (err) {
+        setChatRunning(false)
+        setChatError(err instanceof Error ? err.message : 'Failed to send message')
+      }
+    },
+    [applyChatDelta, chatSession, closeChatStream, selectedJobId],
+  )
+
+  const onClearPastSessions = useCallback(async () => {
+    if (!selectedJobId || chatRunning) {
+      return
+    }
+    setChatLoading(true)
+    setChatError(null)
+    setChatRetrievalNote(null)
+    setFocusNodeId(null)
+    closeChatStream()
+    try {
+      await clearChatSessions(selectedJobId)
+      const created = await createChatSession(selectedJobId)
+      const detail = await getChatSession(created.id)
+      setChatSession(detail)
+      setChatRunning(false)
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : 'Failed to clear chat sessions')
+    } finally {
+      setChatLoading(false)
+    }
+  }, [chatRunning, closeChatStream, selectedJobId])
 
   return (
     <div className="app-shell">
@@ -377,17 +551,33 @@ export function WorkbenchPage() {
           />
         </section>
 
-        <section className="pane">
-          <ProgressRail
-            job={selectedJob}
-            onCancel={onCancel}
-            connectionWarning={connectionWarning}
+        <div className="workspace-main">
+          <section className="pane">
+            <ProgressRail
+              job={selectedJob}
+              onCancel={onCancel}
+              connectionWarning={connectionWarning}
+            />
+          </section>
+
+          <section className="pane">
+            <TreeViewer result={result} focusNodeId={focusNodeId} />
+          </section>
+
+          <section className="pane pane-chat">
+            <ChatPanel
+              session={chatSession}
+              isLoading={chatLoading}
+              isRunning={chatRunning}
+              error={chatError}
+            retrievalNote={chatRetrievalNote}
+            enabled={Boolean(selectedJob && selectedJob.status === 'COMPLETED')}
+            onSend={onSendChat}
+            onClearSessions={onClearPastSessions}
+            onSelectCitation={(nodeId) => setFocusNodeId(nodeId)}
           />
         </section>
-
-        <section className="pane">
-          <TreeViewer result={result} />
-        </section>
+        </div>
       </main>
     </div>
   )

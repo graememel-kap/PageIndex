@@ -57,6 +57,90 @@ class PersistedJob(JobDetail):
     pass
 
 
+class ChatRole(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
+class ChatRunStatus(str, Enum):
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class NodeCitation(BaseModel):
+    node_id: str
+    title: Optional[str] = None
+    start_index: Optional[int] = None
+    end_index: Optional[int] = None
+    line_num: Optional[int] = None
+
+
+class ChatMessage(BaseModel):
+    id: str
+    role: ChatRole
+    content: str
+    created_at: str
+    citations: List[NodeCitation] = Field(default_factory=list)
+
+
+class ChatRun(BaseModel):
+    id: str
+    status: ChatRunStatus
+    user_message_id: str
+    assistant_message_id: str
+    created_at: str
+    updated_at: str
+    retrieval_thinking: Optional[str] = None
+    selected_node_ids: List[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
+class ChatSessionSummary(BaseModel):
+    id: str
+    job_id: str
+    title: str
+    created_at: str
+    updated_at: str
+    message_count: int = 0
+    last_message_preview: Optional[str] = None
+    active_run_id: Optional[str] = None
+    active_run_status: Optional[ChatRunStatus] = None
+
+
+class ChatSessionDetail(ChatSessionSummary):
+    messages: List[ChatMessage] = Field(default_factory=list)
+    runs: List[ChatRun] = Field(default_factory=list)
+
+
+class PersistedChatSession(ChatSessionDetail):
+    pass
+
+
+class ChatMessageCreateRequest(BaseModel):
+    content: str = Field(min_length=1)
+
+
+class ChatMessageCreateResponse(BaseModel):
+    run_id: str
+    user_message_id: str
+    assistant_message_id: str
+
+
+class ChatSessionsClearResponse(BaseModel):
+    deleted_count: int
+
+
+class ChatEvents:
+    RUN_STARTED = "chat.run.started"
+    RETRIEVAL_COMPLETED = "chat.retrieval.completed"
+    ANSWER_DELTA = "chat.answer.delta"
+    ANSWER_COMPLETED = "chat.answer.completed"
+    RUN_COMPLETED = "chat.run.completed"
+    RUN_FAILED = "chat.run.failed"
+
+
 def model_dump_compat(model: BaseModel) -> Dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
